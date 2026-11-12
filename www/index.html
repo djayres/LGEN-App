@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en-GB" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>LGEN</title>
+<link rel="stylesheet" href="style.css">
+<script src="lightweight-charts.js"></script>
+</head>
+<body>
+
+<header id="top">
+  <div class="top-left">
+    <b>LGEN</b>
+    <span id="top-price">—</span>
+    <span id="top-chg" class="chg">…</span>
+  </div>
+  <div class="top-right">
+    <span id="top-status" class="muted">Loading…</span>
+    <button id="refresh-btn" class="icon-btn" title="Refresh now">⟳</button>
+  </div>
+</header>
+
+<main id="pager">
+  <!-- 1. Chart -->
+  <section class="page" id="page-chart">
+    <div class="toolbar" id="chart-toolbar">
+      <select id="share-pick" class="share-pick"></select>
+      <span class="range-btns" id="range-btns">
+        <button data-m="3">3M</button><button data-m="6">6M</button><button data-m="12" class="active">1Y</button>
+        <button data-m="24">2Y</button><button data-m="60">5Y</button><button data-m="0">All</button>
+      </span>
+      <button id="theme-btn" class="small-btn">◐</button>
+    </div>
+    <div id="chart-wrap"><div id="lw-chart"></div><div class="ohlc" id="ohlc"></div></div>
+    <div class="chart-foot muted">Pinch to zoom · drag to pan · swipe the bar above to change page · turn sideways for full screen</div>
+  </section>
+
+  <!-- 2. Signal -->
+  <section class="page" id="page-signal"><div class="pad" id="signal-body"></div></section>
+
+  <!-- 3. Levels -->
+  <section class="page" id="page-levels"><div class="pad" id="levels-body"></div></section>
+
+  <!-- 4. Watchlist -->
+  <section class="page" id="page-watch"><div class="pad" id="watch-body"></div></section>
+
+  <!-- 5. Calendar -->
+  <section class="page" id="page-cal"><div class="pad" id="cal-body"></div></section>
+
+  <!-- 6. Test 4 -->
+  <section class="page" id="page-test"><div class="pad" id="test-body"></div></section>
+</main>
+
+<nav id="tabs">
+  <button data-i="0" class="active"><span>📈</span>Chart</button>
+  <button data-i="1"><span>🚦</span>Signal</button>
+  <button data-i="2"><span>📏</span>Levels</button>
+  <button data-i="3"><span>👀</span>Watch</button>
+  <button data-i="4"><span>📅</span>Dates</button>
+  <button data-i="5"><span>🧪</span>Test 4</button>
+</nav>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

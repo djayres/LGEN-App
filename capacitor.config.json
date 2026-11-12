@@ -1,0 +1,10 @@
+{
+  "appId": "com.djayres.lgenapp",
+  "appName": "LGEN",
+  "webDir": "www",
+  "android": { "backgroundColor": "#0F172A" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true },
+    "SystemBars": { "insetsHandling": "css", "style": "DEFAULT" }
+  }
+}
