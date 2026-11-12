@@ -30,7 +30,10 @@ const fmtShort = s => new Date(s + "T12:00:00Z").toLocaleDateString("en-GB", { w
 const londonDate = d => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 const todayStr = () => londonDate(new Date());
 const daysTo = s => Math.round((Date.parse(s + "T12:00:00Z") - Date.parse(todayStr() + "T12:00:00Z")) / DAY);
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", 3500); }
+function toast(msg, important) {
+  if (!important && Date.now() < (toast.lock || 0)) return;   // don't cover a status-change message
+  if (important) toast.lock = Date.now() + 4000;
+  const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", 3500); }
 
 function londonClock() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
@@ -286,7 +289,7 @@ function renderSignal() {
   const d = lgen(), L = last(d);
   const steps = nextSteps();
   $("signal-body").innerHTML = `
-    <div class="banner ${v.cls}"><div class="big-word">${esc(v.word)}</div>${esc(v.text)}${v.sub && v.sub !== v.text ? `<small>${esc(v.sub)}</small>` : ""}</div>
+    <div class="banner ${v.cls}${Date.now() < (S.flashUntil || 0) ? " flash" : ""}"><div class="big-word">${esc(v.word)}</div>${esc(v.text)}${v.sub && v.sub !== v.text ? `<small>${esc(v.sub)}</small>` : ""}</div>
     ${v.zone ? `<div class="banner b-zone" style="font-size:15px">${esc(v.zone)}</div>` : ""}
     <div class="card"><h3>What happens next</h3>
       <ul class="steps">${steps.map(s => `<li><span class="dot ${s.s}">${s.s === "ok" ? "✓" : s.s === "warn" ? "!" : "·"}</span>
@@ -593,6 +596,7 @@ function showShare(code) {
 const pager = $("pager"), tabs = [...document.querySelectorAll("#tabs button")];
 function goPage(i, smooth = true) {
   S.page = i;
+  try { localStorage.setItem("page", i); } catch (e) {}
   pager.scrollTo({ left: i * pager.clientWidth, behavior: smooth ? "smooth" : "auto" });
   tabs.forEach((b, k) => b.classList.toggle("active", k === i));
   updateFull();
@@ -628,6 +632,24 @@ $("theme-btn").onclick = () => {
   applyTheme(); buildChart(); renderTest();
 };
 
+// ───────────────────────── status change: open on Signal and flash ─────────────────────────
+// Compares the daily check's status with the one you last saw. First run just remembers it.
+function statusKey() {
+  const d = lgen(), rs = d && d.rule_state;
+  return rs && rs.kind ? rs.kind + (rs.holding ? ":in" : ":out") : null;
+}
+function checkStatusChange() {
+  const now = statusKey(); if (!now) return;
+  let seen = null; try { seen = localStorage.getItem("seenStatus"); } catch (e) {}
+  try { localStorage.setItem("seenStatus", now); } catch (e) {}
+  if (!seen || seen === now) return;
+  goPage(1);
+  const v = verdict();
+  toast("Status changed: " + (v ? v.word : now.split(":")[0].toUpperCase()), true);
+  S.flashUntil = Date.now() + 4500;
+  renderSignal();
+}
+
 // ───────────────────────── refresh loop ─────────────────────────
 function renderAll() {
   if (!lgen()) return;
@@ -641,7 +663,7 @@ async function refresh(opts = {}) {
   if (busy) return; busy = true;
   $("refresh-btn").classList.add("spin");
   try {
-    if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) await loadStatus();
+    if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) { await loadStatus(); checkStatusChange(); }
     if (opts.live !== false) await loadLive();
   } catch (e) {
     toast(String(e.message || e));
@@ -669,5 +691,6 @@ document.addEventListener("visibilitychange", () => {
   renderAll();
   let p = 0; try { p = +(localStorage.getItem("page") || 0); } catch (e) {}
   goPage(p, false);
+  checkStatusChange();
   refresh();   // live prices straight away
 })();

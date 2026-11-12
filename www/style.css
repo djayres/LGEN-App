@@ -140,3 +140,7 @@ table.trades td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
 
 #toast { position: fixed; left: 50%; bottom: calc(80px + var(--safe-b)); transform: translateX(-50%); background: #333; color: #fff;
   padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 50; max-width: calc(100% - 32px); display: none; }
+
+/* Status changed: banner pulses for a few seconds */
+.banner.flash { animation: flash 0.9s ease-in-out 5; }
+@keyframes flash { 0%, 100% { transform: scale(1); box-shadow: none; } 50% { transform: scale(1.03); box-shadow: 0 0 0 4px currentColor; } }
