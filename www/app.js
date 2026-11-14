@@ -607,7 +607,10 @@ pager.addEventListener("scroll", () => {
   if (i !== S.page) { S.page = i; tabs.forEach((b, k) => b.classList.toggle("active", k === i)); try { localStorage.setItem("page", i); } catch (e) {} updateFull(); }
 }, { passive: true });
 
+let lastPage = -1;
+function pageChanged() { if (lastPage === 6 && S.page !== 6) { markNewsSeen(); renderNews(); } lastPage = S.page; }
 function updateFull() {
+  pageChanged();
   const land = window.innerWidth > window.innerHeight;
   const full = land && S.page === 0;
   if (document.body.classList.contains("full") !== full) {
@@ -650,12 +653,80 @@ function checkStatusChange() {
   renderSignal();
 }
 
+// ───────────────────────── news (Google News RSS) ─────────────────────────
+const NEWS_TOPICS = [
+  { id: "inf", label: "Inflation", q: '"UK inflation" OR "CPI" UK inflation' },
+  { id: "boe", label: "BoE / rates", q: '"Bank of England" interest rates' },
+  { id: "gilt", label: "Gilts", q: 'gilt yields' },
+  { id: "lg", label: "L&G", q: '"Legal & General" OR "Legal and General"' },
+];
+const NEWS_EVERY_MS = 15 * 60 * 1000;
+S.news = []; S.newsAt = 0; S.newsTopic = "all";
+try { const c = JSON.parse(localStorage.getItem("news") || "null"); if (c) { S.news = c.items; S.newsAt = c.at; } } catch (e) {}
+
+function parseRss(xml, topic) {
+  const doc = new DOMParser().parseFromString(xml, "text/xml"), out = [];
+  for (const it of doc.querySelectorAll("item")) {
+    const get = t => (it.querySelector(t) || {}).textContent || "";
+    const src = get("source");
+    let title = get("title").trim();
+    if (src && title.endsWith(" - " + src)) title = title.slice(0, -(src.length + 3));
+    const t = Date.parse(get("pubDate"));
+    if (!title || isNaN(t)) continue;
+    out.push({ title, link: get("link").trim(), src, t, topics: [topic] });
+  }
+  return out;
+}
+async function loadNews() {
+  const res = await Promise.allSettled(NEWS_TOPICS.map(tp => getText(
+    "https://news.google.com/rss/search?q=" + encodeURIComponent(tp.q + " when:7d") + "&hl=en-GB&gl=GB&ceid=GB:en").then(x => parseRss(x, tp.id))));
+  const byTitle = new Map();
+  for (const r of res) if (r.status === "fulfilled") for (const n of r.value) {
+    const k = n.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80);
+    const had = byTitle.get(k);
+    if (had) { if (!had.topics.includes(n.topics[0])) had.topics.push(n.topics[0]); }
+    else byTitle.set(k, n);
+  }
+  if (!byTitle.size) throw new Error("News unavailable");
+  S.news = [...byTitle.values()].sort((a, b) => b.t - a.t).slice(0, 120);
+  S.newsAt = Date.now();
+  try { localStorage.setItem("news", JSON.stringify({ items: S.news, at: S.newsAt })); } catch (e) {}
+  renderNews();
+}
+function ago(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 60) return Math.max(1, m) + " min ago";
+  if (m < 24 * 60) return Math.round(m / 60) + " h ago";
+  return new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+function renderNews() {
+  let seen = 0; try { seen = +(localStorage.getItem("newsSeen") || 0); } catch (e) {}
+  const list = S.news.filter(n => S.newsTopic === "all" || n.topics.includes(S.newsTopic));
+  const lbl = Object.fromEntries(NEWS_TOPICS.map(t => [t.id, t.label]));
+  $("news-body").innerHTML = `
+    <div class="chips">${[{ id: "all", label: "All" }, ...NEWS_TOPICS].map(t =>
+      `<button class="chip ${S.newsTopic === t.id ? "active" : ""}" data-t="${t.id}">${esc(t.label)}</button>`).join("")}</div>
+    <div class="card" style="padding-top:2px;padding-bottom:2px">${list.length ? list.map(n => `
+      <a class="news-item" href="${esc(n.link)}">
+        <div class="news-title">${esc(n.title)}</div>
+        <div class="news-meta">${seen && n.t > seen ? '<span class="news-new">NEW</span>' : ""}<span>${esc(n.src)}</span><span>${ago(n.t)}</span>
+          <span>${n.topics.map(t => esc(lbl[t])).join(" · ")}</span></div>
+      </a>`).join("") : '<div class="muted" style="padding:12px 0">No headlines yet. Pull in news with ⟳ at the top.</div>'}</div>
+    <div class="note">Google News, last 7 days, newest first. Tap a headline to open it.${S.newsAt ? " Updated " + ago(S.newsAt) + "." : ""}</div>`;
+  $("news-body").querySelectorAll(".chip").forEach(b => b.onclick = () => { S.newsTopic = b.dataset.t; renderNews(); });
+}
+function markNewsSeen() { if (S.news.length) try { localStorage.setItem("newsSeen", String(Math.max(...S.news.map(n => n.t)))); } catch (e) {} }
+function refreshNews(force) {
+  if (!force && Date.now() - S.newsAt < NEWS_EVERY_MS) return;
+  loadNews().catch(e => { if (S.page === 6) toast(e.message); });
+}
+
 // ───────────────────────── refresh loop ─────────────────────────
 function renderAll() {
   if (!lgen()) return;
   renderHeader();
   buildChart();
-  renderSignal(); renderLevels(); renderWatch(); renderCalendar(); renderTest();
+  renderSignal(); renderLevels(); renderWatch(); renderCalendar(); renderTest(); renderNews();
 }
 
 let busy = false;
@@ -670,15 +741,17 @@ async function refresh(opts = {}) {
     renderAll();
   } finally { busy = false; $("refresh-btn").classList.remove("spin"); }
 }
-$("refresh-btn").onclick = () => refresh({ status: true });
+$("refresh-btn").onclick = () => { refresh({ status: true }); refreshNews(true); };
 
 setInterval(() => {
   if (document.hidden) return;
+  refreshNews();
   if (marketOpen() && Date.now() - S.liveAt >= LIVE_EVERY_MS) refresh();
   else renderHeader();
 }, 60 * 1000);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
+  refreshNews();
   if (Date.now() - S.liveAt > 2 * 60 * 1000) refresh({ status: Date.now() - S.statusAt > STATUS_EVERY_MS });
 });
 
@@ -692,5 +765,6 @@ document.addEventListener("visibilitychange", () => {
   let p = 0; try { p = +(localStorage.getItem("page") || 0); } catch (e) {}
   goPage(p, false);
   checkStatusChange();
-  refresh();   // live prices straight away
+  refresh();
+  refreshNews(true);   // live prices straight away
 })();

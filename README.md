@@ -1,6 +1,6 @@
 # LGEN phone app (Android)
 
-Swipe between six pages: Chart, Signal, Levels, Watchlist, Dates, Test 4.
+Swipe between seven pages: Chart, Signal, Levels, Watchlist, Dates, Test 4, News.
 
 - **Install / update:** on your phone open
   https://github.com/djayres/LGEN-App/releases/latest/download/LGEN-App.apk
