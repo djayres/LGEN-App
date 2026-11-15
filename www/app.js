@@ -196,7 +196,20 @@ function keyLevel(ticker = "LGEN.L") { const s = wlShare(ticker); return s && s.
 function eventsFor(code) { return (S.events || []).filter(e => e.code === code).sort((a, b) => a.t.localeCompare(b.t)); }
 function nextEvent(code, within) {
   const today = todayStr();
-  return eventsFor(code).find(e => e.t >= today && daysTo(e.t) <= within);
+  return eventsFor(code).find(e => (e.kind || "R") === "R" && e.t >= today && daysTo(e.t) <= within);
+}
+// Next ex-dividend: [date, amount, confirmed?]. A confirmed date from events.js replaces the daily check's estimate.
+function nextExdiv(code, ticker) {
+  const st = wlShare(ticker), today = todayStr();
+  const exp = st && st.next_exdivs && st.next_exdivs.find(x => x[0] >= today);
+  const conf = eventsFor(code).find(e => e.kind === "D" && e.t >= today);
+  if (conf && (!exp || Math.abs(Date.parse(conf.t) - Date.parse(exp[0])) < 20 * DAY)) return [conf.t, exp ? exp[1] : null, true];
+  return exp ? [exp[0], exp[1], false] : null;
+}
+function expectTable(ev) {
+  if (!ev.expect || !ev.expect.length) return "";
+  return `<table class="trades" style="margin-top:6px">${ev.expect.map(([k, v]) =>
+    `<tr><td style="width:38%"><b>${esc(k)}</b></td><td>${esc(v)}</td></tr>`).join("")}</table>`;
 }
 const whenTxt = t => { const n = daysTo(t); return n === 0 ? "today" : n === 1 ? "tomorrow" : fmtShort(t) + " (" + n + " days)"; };
 
@@ -232,11 +245,11 @@ function nextSteps() {
               `RSI now ${L.rsi.toFixed(0)} (needs over ${rs.winter_sell_rsi || 70}${rsiOk ? " ✓" : ""})`,
               `MACD ${macdUp ? "above" : "below"} its signal line${P && (P.macd > P.macd_sig) && !macdUp ? " · crossed down today" : ""}`].filter(Boolean).join(" · ") });
     }
-    const ex = wl && wl.next_exdivs && wl.next_exdivs[0];
+    const ex = nextExdiv("LGEN", "LGEN.L");
     if (ex && /ex-div/i.test(rs.exit_reason || "")) {
       const sellBy = tradingDaysBefore(ex[0], 3);
       steps.push({ s: daysTo(sellBy) <= 10 ? "warn" : "no", t: `Otherwise out by ${fmtShort(sellBy)}`,
-        sub: `${rs.exit_reason} (ex-div ${fmtDate(ex[0])}, ${ex[1].toFixed(2)}p expected) · ${daysTo(sellBy)} days away` });
+        sub: `${rs.exit_reason} (ex-div ${fmtDate(ex[0])}${ex[2] ? ", confirmed" : ""}${ex[1] ? ", " + ex[1].toFixed(2) + "p expected" : ""}) · ${daysTo(sellBy)} days away` });
     }
   } else {
     steps.push({ s: "no", t: "Not holding", sub: rs.exit_reason ? "Last exit: " + rs.exit_reason : "" });
@@ -247,7 +260,7 @@ function nextSteps() {
     }
   }
   const ev = nextEvent("LGEN", 14);
-  if (ev) steps.push({ s: "warn", t: `${ev.type} ${whenTxt(ev.t)}`, sub: (ev.note ? ev.note + " " : "") + "Expect a bigger move than usual on the day." });
+  if (ev) steps.push({ s: "warn", t: `${ev.type} ${whenTxt(ev.t)}`, sub: (ev.note ? ev.note + " " : "") + "Expect a bigger move than usual on the day." + (ev.expect ? " Beat or miss: compare the RNS with this." : ""), html: expectTable(ev) });
   const kl = keyLevel();
   if (kl) steps.push({ s: L.c < kl.price ? "warn" : "ok", t: `Key support ${p1(kl.price)}p`,
     sub: `${L.c >= kl.price ? (L.c / kl.price * 100 - 100).toFixed(1) + "% above" : "BROKEN"} · ${kl.note || "a close below it would be the first crack in the uptrend"}` });
@@ -275,7 +288,7 @@ function watchAlerts() {
   if (L.ma50 && Math.abs(L.c / L.ma50 - 1) < 0.01) out.push(["t-blue", "WMA50", `At WMA50 (${p1(L.ma50)}p)`]);
   const ev = nextEvent("LGEN", 14);
   if (ev) out.push(["t-amber", "RESULTS", `${ev.type} ${whenTxt(ev.t)}`]);
-  const ex = wl && wl.next_exdivs && wl.next_exdivs[0];
+  const ex = nextExdiv("LGEN", "LGEN.L");
   if (ex && daysTo(ex[0]) <= 21) out.push(["t-amber", "EX-DIV", `Ex-dividend ${fmtDate(ex[0])} (${daysTo(ex[0])} days)`]);
   if (rs.watch) out.push(["t-amber", "WATCH", rs.watch]);
   if (rs.divergence) out.push(["t-green", "÷", "Bullish RSI divergence: " + rs.divergence]);
@@ -305,7 +318,7 @@ function renderSignal() {
     ${v.zone ? `<div class="banner b-zone" style="font-size:15px">${esc(v.zone)}</div>` : ""}
     <div class="card"><h3>What happens next</h3>
       <ul class="steps">${steps.map(s => `<li><span class="dot ${s.s}">${s.s === "ok" ? "✓" : s.s === "warn" ? "!" : "·"}</span>
-        <div><div>${esc(s.t)}</div>${s.sub ? `<div class="sub">${esc(s.sub)}</div>` : ""}</div></li>`).join("")}</ul>
+        <div style="flex:1"><div>${esc(s.t)}</div>${s.sub ? `<div class="sub">${esc(s.sub)}</div>` : ""}${s.html || ""}</div></li>`).join("")}</ul>
     </div>
     <div class="card"><h3>Now</h3>
       <div class="stat-grid">
@@ -380,21 +393,28 @@ function renderCalendar() {
   for (const sh of S.shares) if (!/_TEST/.test(sh.code)) names[sh.ticker] = sh.code;
   for (const st of S.watch.shares) {
     const code = names[st.ticker] || st.ticker, d = S.data[code];
+    const evs = eventsFor(code), near = (a, b, days) => Math.abs(Date.parse(a) - Date.parse(b)) < days * DAY;
     const known = (d && d.ex_div_dates) || [];
     for (const t of known) if (t >= from) ev.push({ t, code, what: `Ex-dividend${d.ex_div_amounts && d.ex_div_amounts[t] ? " · " + d.ex_div_amounts[t].toFixed(2) + "p" : ""}`, kind: "D" });
-    for (const [t, a] of (st.next_exdivs || [])) if (!known.some(k => Math.abs(Date.parse(k) - Date.parse(t)) < 10 * DAY))
+    for (const [t, a] of (st.next_exdivs || [])) if (![...known, ...evs.filter(e => e.kind === "D").map(e => e.t)].some(k => Math.abs(Date.parse(k) - Date.parse(t)) < 20 * DAY))
       ev.push({ t, code, what: `Ex-dividend · ${a.toFixed(2)}p (expected)`, kind: "D" });
-    for (const e of eventsFor(code)) if (e.t >= from) ev.push({ t: e.t, code, what: e.type + (e.note ? " · " + e.note : ""), kind: "R" });
+    for (const e of evs) if (e.t >= from) ev.push({ t: e.t, code, what: e.type + (e.note ? " · " + e.note : ""), kind: e.kind || "R", expect: e.expect });
+    // Updates repeat yearly: show next year's as "expected" until the company confirms it
+    for (const e of evs.filter(e => (e.kind || "R") === "R")) {
+      const n = new Date(Date.parse(e.t) + 364 * DAY).toISOString().slice(0, 10);
+      if (n >= today && daysTo(n) <= 400 && !evs.some(x => near(x.t, n, 45) && (x.kind || "R") === "R"))
+        ev.push({ t: n, code, what: e.type.replace(/ \d{4}$/, "") + " (expected, around this date)", kind: "R" });
+    }
     const res = (d && d.results_dates) || [];
     for (const r of res) if (r.t >= from) ev.push({ t: r.t, code, what: `${r.type} results`, kind: "R" });
     for (const type of ["Full year", "Half year"]) {   // next results: about a year after the last one of the same kind
       const lastR = res.filter(r => r.type === type).map(r => r.t).sort().pop();
       if (!lastR) continue;
       const n = new Date(Date.parse(lastR) + 364 * DAY).toISOString().slice(0, 10);
-      if (n >= today) ev.push({ t: n, code, what: `${type} results (expected, around this date)`, kind: "R" });
+      if (n >= today && !evs.some(x => near(x.t, n, 45))) ev.push({ t: n, code, what: `${type} results (expected, around this date)`, kind: "R" });
     }
     if (code === "LGEN") {
-      const rs = d && d.rule_state, ex = (st.next_exdivs || [])[0];
+      const rs = d && d.rule_state, ex = nextExdiv("LGEN", "LGEN.L");
       if (rs && rs.holding && ex && /ex-div/i.test(rs.exit_reason || ""))
         ev.push({ t: tradingDaysBefore(ex[0], 3), code, what: "Rule: be out by today (3 trading days before ex-div)", kind: "S" });
     }
@@ -405,7 +425,7 @@ function renderCalendar() {
     const dt = new Date(e.t + "T12:00:00Z"), n = daysTo(e.t);
     const tag = e.kind === "D" ? '<span class="tag t-green">D</span>' : e.kind === "R" ? '<span class="tag t-blue">R</span>' : '<span class="tag t-red">!</span>';
     return `<div class="cal-item ${isPast ? "cal-past" : ""}"><div class="cal-date"><b>${dt.getUTCDate()}</b><span>${dt.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" })}</span></div>
-      <div class="cal-what">${tag} <b>${esc(e.code)}</b> ${esc(e.what)}</div>
+      <div class="cal-what">${tag} <b>${esc(e.code)}</b> ${esc(e.what)}${!isPast && e.expect ? expectTable(e) : ""}</div>
       <div class="cal-when">${isPast ? "" : n === 0 ? "today" : "in " + n + "d"}</div></div>`;
   };
   let html = "", month = "";
@@ -529,7 +549,7 @@ function buildChart() {
   const LW = window.LightweightCharts, th = TH(), cs = d.candles;
   const times = cs.map(c => Date.parse(c.t));
   markIdx.D = (d.ex_div_dates || []).map(s => nearIdx(times, s)).filter(i => i >= 0);
-  const evs = eventsFor(S.code.replace(/_TEST\d*$/, "")).map(e => ({ t: e.t, type: e.type }));
+  const evs = eventsFor(S.code.replace(/_TEST\d*$/, "")).filter(e => (e.kind || "R") === "R").map(e => ({ t: e.t, type: e.type }));
   markIdx.R = [...(d.results_dates || []), ...evs].map(r => [nearIdx(times, r.t), r.type]).filter(r => r[0] >= 0);
   const keep = chart ? chart.timeScale().getVisibleLogicalRange() : null, sameShare = buildChart.code === S.code && keep;
   if (chart) { chart.remove(); chart = null; }
