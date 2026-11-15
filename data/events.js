@@ -11,9 +11,14 @@ window.EVENTS = [
       ["Solvency II ratio", "above 210% (HL). Was 201% at June, 209% pro forma after the debt refinancing"],
       ["2026 core EPS growth", "already guided above the top of 6-9%: a firmer, higher number is the beat"],
       ["Asset management flows", "further outflows expected"],
-      ["UK PRT market 2026", "L&G said below £50bn: a further cut would be a miss"]
+      ["UK PRT market 2026", "L&G said below £50bn: a further cut would be a miss"],
+      ["Dividend cover", "H1 capital generation £790m (consensus £750m), cover about 1.2x. Good: repeats 'dividend covered by core EPS this year'. Warning: that wording dropped or softened"]
     ] },
-  { "code": "LGEN", "t": "2027-03-08", "kind": "R", "type": "Full year results 2026" },
+  { "code": "LGEN", "t": "2027-03-08", "kind": "R", "type": "Full year results 2026",
+    "expect": [
+      ["Dividend cover", "about 1.2x on capital generation is thin but planned. Under 1.0x = real warning. Core EPS should cover the dividend (management guidance)"],
+      ["Capital generation", "on track for £5-6bn over 2025-27"]
+    ] },
   { "code": "LGEN", "t": "2027-04-22", "kind": "D", "type": "Ex-dividend (final, confirmed date)" },
   { "code": "LGEN", "t": "2027-05-20", "kind": "R", "type": "Q1 trading update" },
   { "code": "LGEN", "t": "2027-08-11", "kind": "R", "type": "Half year results 2027" },
