@@ -15,7 +15,7 @@ const S = {
   watch: null,         // watchlist
   live: {},            // ticker -> {price, prev, time}
   liveAt: 0, statusAt: 0, statusSource: "",
-  code: "LGEN", months: 12, page: 0,
+  code: "LGEN", months: 12, page: 0, events: [],
 };
 
 // ───────────────────────── helpers ─────────────────────────
@@ -136,6 +136,7 @@ async function loadStatus() {
   const wl = await loadDataFile("watchlist.js");
   S.watch = wl.obj;
   S.statusSource = idx.src === "repo" && wl.src === "repo" ? "repo" : wl.src;
+  try { S.events = (await loadDataFile("events.js")).obj || []; } catch (e) { S.events = S.events || []; }
   const got = await Promise.all(S.shares.map(sh => loadDataFile("chart_data/" + sh.code + ".js").then(r => [sh.code, r.obj]).catch(() => null)));
   for (const g of got) if (g) { cleanWicks(g[1].candles); S.data[g[0]] = g[1]; }
   S.statusAt = Date.now();
@@ -192,6 +193,13 @@ function lgen() { return S.data.LGEN; }
 function wlShare(ticker) { return S.watch && S.watch.shares ? S.watch.shares.find(s => s.ticker === ticker) : null; }
 function keyLevel(ticker = "LGEN.L") { const s = wlShare(ticker); return s && s.key_levels && s.key_levels[0]; }
 
+function eventsFor(code) { return (S.events || []).filter(e => e.code === code).sort((a, b) => a.t.localeCompare(b.t)); }
+function nextEvent(code, within) {
+  const today = todayStr();
+  return eventsFor(code).find(e => e.t >= today && daysTo(e.t) <= within);
+}
+const whenTxt = t => { const n = daysTo(t); return n === 0 ? "today" : n === 1 ? "tomorrow" : fmtShort(t) + " (" + n + " days)"; };
+
 function verdict() {
   const d = lgen(); if (!d) return null;
   const L = last(d), rs = d.rule_state || {}, kl = keyLevel();
@@ -238,6 +246,8 @@ function nextSteps() {
         sub: `RSI now ${L.rsi.toFixed(0)} (needs under ${rs.buy_rsi || 40}${rsiOk ? " ✓" : ""}) · today's candle ${bull ? "bullish ✓" : "not bullish"}` });
     }
   }
+  const ev = nextEvent("LGEN", 14);
+  if (ev) steps.push({ s: "warn", t: `${ev.type} ${whenTxt(ev.t)}`, sub: (ev.note ? ev.note + " " : "") + "Expect a bigger move than usual on the day." });
   const kl = keyLevel();
   if (kl) steps.push({ s: L.c < kl.price ? "warn" : "ok", t: `Key support ${p1(kl.price)}p`,
     sub: `${L.c >= kl.price ? (L.c / kl.price * 100 - 100).toFixed(1) + "% above" : "BROKEN"} · ${kl.note || "a close below it would be the first crack in the uptrend"}` });
@@ -263,6 +273,8 @@ function watchAlerts() {
     out.push([L.macd_hist > 0 ? "t-green" : "t-red", "MACD", `MACD crossed ${L.macd_hist > 0 ? "up through" : "down through"} its signal line`]);
   if (L.ma200 && Math.abs(L.c / L.ma200 - 1) < 0.02) out.push(["t-amber", "WMA200", `Within 2% of WMA200 (${p1(L.ma200)}p)`]);
   if (L.ma50 && Math.abs(L.c / L.ma50 - 1) < 0.01) out.push(["t-blue", "WMA50", `At WMA50 (${p1(L.ma50)}p)`]);
+  const ev = nextEvent("LGEN", 14);
+  if (ev) out.push(["t-amber", "RESULTS", `${ev.type} ${whenTxt(ev.t)}`]);
   const ex = wl && wl.next_exdivs && wl.next_exdivs[0];
   if (ex && daysTo(ex[0]) <= 21) out.push(["t-amber", "EX-DIV", `Ex-dividend ${fmtDate(ex[0])} (${daysTo(ex[0])} days)`]);
   if (rs.watch) out.push(["t-amber", "WATCH", rs.watch]);
@@ -372,6 +384,7 @@ function renderCalendar() {
     for (const t of known) if (t >= from) ev.push({ t, code, what: `Ex-dividend${d.ex_div_amounts && d.ex_div_amounts[t] ? " · " + d.ex_div_amounts[t].toFixed(2) + "p" : ""}`, kind: "D" });
     for (const [t, a] of (st.next_exdivs || [])) if (!known.some(k => Math.abs(Date.parse(k) - Date.parse(t)) < 10 * DAY))
       ev.push({ t, code, what: `Ex-dividend · ${a.toFixed(2)}p (expected)`, kind: "D" });
+    for (const e of eventsFor(code)) if (e.t >= from) ev.push({ t: e.t, code, what: e.type + (e.note ? " · " + e.note : ""), kind: "R" });
     const res = (d && d.results_dates) || [];
     for (const r of res) if (r.t >= from) ev.push({ t: r.t, code, what: `${r.type} results`, kind: "R" });
     for (const type of ["Full year", "Half year"]) {   // next results: about a year after the last one of the same kind
@@ -516,7 +529,8 @@ function buildChart() {
   const LW = window.LightweightCharts, th = TH(), cs = d.candles;
   const times = cs.map(c => Date.parse(c.t));
   markIdx.D = (d.ex_div_dates || []).map(s => nearIdx(times, s)).filter(i => i >= 0);
-  markIdx.R = (d.results_dates || []).map(r => [nearIdx(times, r.t), r.type]).filter(r => r[0] >= 0);
+  const evs = eventsFor(S.code.replace(/_TEST\d*$/, "")).map(e => ({ t: e.t, type: e.type }));
+  markIdx.R = [...(d.results_dates || []), ...evs].map(r => [nearIdx(times, r.t), r.type]).filter(r => r[0] >= 0);
   const keep = chart ? chart.timeScale().getVisibleLogicalRange() : null, sameShare = buildChart.code === S.code && keep;
   if (chart) { chart.remove(); chart = null; }
   buildChart.code = S.code;
@@ -655,10 +669,10 @@ function checkStatusChange() {
 
 // ───────────────────────── news (Google News RSS) ─────────────────────────
 const NEWS_TOPICS = [
-  { id: "inf", label: "Inflation", q: '"UK inflation" OR "CPI" UK inflation' },
-  { id: "boe", label: "BoE / rates", q: '"Bank of England" interest rates' },
-  { id: "gilt", label: "Gilts", q: 'gilt yields' },
-  { id: "lg", label: "L&G", q: '"Legal & General" OR "Legal and General"' },
+  { id: "inf", label: "Inflation", q: ['"UK inflation"', 'UK CPI inflation'] },
+  { id: "boe", label: "BoE / rates", q: ['"Bank of England" interest rates'] },
+  { id: "gilt", label: "Gilts", q: ['gilt yields'] },
+  { id: "lg", label: "L&G", q: ['"Legal & General"', '"Legal and General"', '"L&G" shares OR results OR "trading update"', 'LGEN shares', '"Legal & General" "trading update" OR results OR preview'] },
 ];
 const NEWS_EVERY_MS = 15 * 60 * 1000;
 S.news = []; S.newsAt = 0; S.newsTopic = "all";
@@ -678,8 +692,9 @@ function parseRss(xml, topic) {
   return out;
 }
 async function loadNews() {
-  const res = await Promise.allSettled(NEWS_TOPICS.map(tp => getText(
-    "https://news.google.com/rss/search?q=" + encodeURIComponent(tp.q + " when:7d") + "&hl=en-GB&gl=GB&ceid=GB:en").then(x => parseRss(x, tp.id))));
+  const jobs = NEWS_TOPICS.flatMap(tp => tp.q.map(q => [tp.id, q]));
+  const res = await Promise.allSettled(jobs.map(([id, q]) => getText(
+    "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:14d") + "&hl=en-GB&gl=GB&ceid=GB:en").then(x => parseRss(x, id))));
   const byTitle = new Map();
   for (const r of res) if (r.status === "fulfilled") for (const n of r.value) {
     const k = n.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80);
@@ -688,7 +703,7 @@ async function loadNews() {
     else byTitle.set(k, n);
   }
   if (!byTitle.size) throw new Error("News unavailable");
-  S.news = [...byTitle.values()].sort((a, b) => b.t - a.t).slice(0, 120);
+  S.news = [...byTitle.values()].sort((a, b) => b.t - a.t).slice(0, 200);
   S.newsAt = Date.now();
   try { localStorage.setItem("news", JSON.stringify({ items: S.news, at: S.newsAt })); } catch (e) {}
   renderNews();
@@ -712,7 +727,7 @@ function renderNews() {
         <div class="news-meta">${seen && n.t > seen ? '<span class="news-new">NEW</span>' : ""}<span>${esc(n.src)}</span><span>${ago(n.t)}</span>
           <span>${n.topics.map(t => esc(lbl[t])).join(" · ")}</span></div>
       </a>`).join("") : '<div class="muted" style="padding:12px 0">No headlines yet. Pull in news with ⟳ at the top.</div>'}</div>
-    <div class="note">Google News, last 7 days, newest first. Tap a headline to open it.${S.newsAt ? " Updated " + ago(S.newsAt) + "." : ""}</div>`;
+    <div class="note">Google News, last 14 days, newest first. Tap a headline to open it.${S.newsAt ? " Updated " + ago(S.newsAt) + "." : ""}</div>`;
   $("news-body").querySelectorAll(".chip").forEach(b => b.onclick = () => { S.newsTopic = b.dataset.t; renderNews(); });
 }
 function markNewsSeen() { if (S.news.length) try { localStorage.setItem("newsSeen", String(Math.max(...S.news.map(n => n.t)))); } catch (e) {} }
