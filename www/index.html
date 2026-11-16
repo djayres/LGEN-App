@@ -20,6 +20,7 @@
     <button id="refresh-btn" class="icon-btn" title="Refresh now">⟳</button>
   </div>
 </header>
+<div id="results-strip" style="display:none" role="button"></div>
 
 <main id="pager">
   <!-- 1. Chart -->
@@ -65,6 +66,10 @@
   <button data-i="6"><span>📰</span>News</button>
 </nav>
 
+<div id="results-sheet" style="display:none">
+  <div class="rs-head"><b>Results scorecard</b><button id="results-close" class="icon-btn">✕</button></div>
+  <div class="pad" id="results-sheet-body"></div>
+</div>
 <div id="toast"></div>
 <script src="app.js"></script>
 </body>

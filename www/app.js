@@ -137,6 +137,7 @@ async function loadStatus() {
   S.watch = wl.obj;
   S.statusSource = idx.src === "repo" && wl.src === "repo" ? "repo" : wl.src;
   try { S.events = (await loadDataFile("events.js")).obj || []; } catch (e) { S.events = S.events || []; }
+  try { S.results = (await loadDataFile("results.js")).obj || []; } catch (e) { S.results = S.results || []; }
   const got = await Promise.all(S.shares.map(sh => loadDataFile("chart_data/" + sh.code + ".js").then(r => [sh.code, r.obj]).catch(() => null)));
   for (const g of got) if (g) { cleanWicks(g[1].candles); S.data[g[0]] = g[1]; }
   S.statusAt = Date.now();
@@ -687,6 +688,48 @@ function checkStatusChange() {
   renderSignal();
 }
 
+// ───────────────────────── results scorecard: banner + full breakdown ─────────────────────────
+// data/results.js is written by the results-day check. The newest one shows as a strip under the
+// header for 7 days; the first time you open the app after a new one, the breakdown opens by itself.
+const VERDICT_CLS = { "BEAT": "t-green", "IN LINE": "t-blue", "MISS": "t-red", "NOT GIVEN": "t-grey", "MIXED": "t-amber" };
+const OVERALL_CLS = { "BEAT": "b-buy", "MISS": "b-sell", "MIXED": "b-zone" };
+function latestResult() {
+  const r = (S.results || []).filter(x => x && x.t && daysTo(x.t) <= 0 && daysTo(x.t) >= -7).sort((a, b) => b.t.localeCompare(a.t));
+  return r[0] || null;
+}
+function renderResultsStrip() {
+  const r = latestResult(), el = $("results-strip");
+  if (!r) { el.style.display = "none"; return; }
+  el.className = "banner " + (OVERALL_CLS[r.overall] || "b-wait");
+  el.style.display = "block";
+  el.innerHTML = `<div class="rs-top"><span>${esc(r.code)} ${esc(r.type)} · ${daysTo(r.t) === 0 ? "today" : fmtShort(r.t)}</span><b>${esc(r.overall)} ›</b></div>
+    <small>${esc(r.headline)}</small>`;
+}
+function openResults(r) {
+  r = r || latestResult(); if (!r) return;
+  const lines = r.lines || [];
+  $("results-sheet-body").innerHTML = `
+    <div class="banner ${OVERALL_CLS[r.overall] || "b-wait"}"><div class="big-word">${esc(r.overall)}</div>${esc(r.code)} ${esc(r.type)} · ${fmtDate(r.t)}<small>${esc(r.headline)}</small></div>
+    <div class="card"><h3>Scorecard</h3>${lines.map(([what, actual, expected, v, note]) => `
+      <div class="rs-line"><span class="tag ${VERDICT_CLS[v] || "t-grey"}">${esc(v)}</span>
+        <div style="flex:1"><b>${esc(what)}</b><div>${esc(actual)} <span class="muted">vs ${esc(expected)}</span></div>${note ? `<div class="sub">${esc(note)}</div>` : ""}</div></div>`).join("")}
+    </div>
+    ${r.guidance ? `<div class="card"><h3>Guidance wording</h3><div>${esc(r.guidance)}</div></div>` : ""}
+    ${r.other && r.other.length ? `<div class="card"><h3>Also in the update</h3><ul class="rs-other">${r.other.map(o => `<li>${esc(o)}</li>`).join("")}</ul></div>` : ""}
+    ${r.reaction ? `<div class="card"><h3>Market reaction</h3><div>${esc(r.reaction)}</div></div>` : ""}
+    ${r.sources && r.sources.length ? `<div class="card"><h3>Sources</h3>${r.sources.map(([t, u]) => `<a class="news-item" href="${esc(u)}"><div class="news-title">${esc(t)}</div></a>`).join("")}</div>` : ""}
+    <div class="note">Facts from the release and news reports, judged against consensus where quoted. Not advice.${r.updated ? " Updated " + esc(r.updated) + "." : ""}</div>`;
+  $("results-sheet").style.display = "flex";
+  try { localStorage.setItem("seenResult", r.id || r.t); } catch (e) {}
+}
+function checkNewResult() {
+  const r = latestResult(); if (!r) return;
+  let seen = null; try { seen = localStorage.getItem("seenResult"); } catch (e) {}
+  if (seen !== (r.id || r.t)) openResults(r);
+}
+$("results-strip").onclick = () => openResults();
+$("results-close").onclick = () => { $("results-sheet").style.display = "none"; };
+
 // ───────────────────────── news (Google News RSS) ─────────────────────────
 const NEWS_TOPICS = [
   { id: "inf", label: "Inflation", q: ['"UK inflation"', 'UK CPI inflation'] },
@@ -760,6 +803,7 @@ function refreshNews(force) {
 function renderAll() {
   if (!lgen()) return;
   renderHeader();
+  renderResultsStrip();
   buildChart();
   renderSignal(); renderLevels(); renderWatch(); renderCalendar(); renderTest(); renderNews();
 }
@@ -769,7 +813,7 @@ async function refresh(opts = {}) {
   if (busy) return; busy = true;
   $("refresh-btn").classList.add("spin");
   try {
-    if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) { await loadStatus(); checkStatusChange(); }
+    if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) { await loadStatus(); checkStatusChange(); checkNewResult(); }
     if (opts.live !== false) await loadLive();
   } catch (e) {
     toast(String(e.message || e));
@@ -800,6 +844,7 @@ document.addEventListener("visibilitychange", () => {
   let p = 0; try { p = +(localStorage.getItem("page") || 0); } catch (e) {}
   goPage(p, false);
   checkStatusChange();
+  checkNewResult();
   refresh();
   refreshNews(true);   // live prices straight away
 })();

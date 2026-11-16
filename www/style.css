@@ -156,3 +156,19 @@ table.trades td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
 .news-title { font-size: 15px; font-weight: 500; line-height: 1.35; }
 .news-meta { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .news-new { color: var(--blue); font-weight: 700; }
+
+/* Results scorecard: strip under the header + full-screen breakdown */
+#results-strip { flex: none; margin: 6px 10px 0; padding: 9px 12px; font-size: 14px; text-align: left; cursor: pointer; }
+#results-strip .rs-top { display: flex; justify-content: space-between; gap: 8px; }
+#results-strip small { margin-top: 3px; font-size: 12.5px; }
+body.full #results-strip { display: none !important; }
+#results-sheet { position: fixed; inset: 0; z-index: 50; background: var(--bg); flex-direction: column;
+  padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l); }
+#results-sheet .rs-head { flex: none; display: flex; justify-content: space-between; align-items: center; padding: 8px 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border); }
+#results-sheet .pad { flex: 1; overflow-y: auto; }
+.rs-line { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.rs-line:last-child { border-bottom: 0; }
+.rs-line .tag { flex: none; width: 74px; text-align: center; font-size: 11px; font-weight: 700; padding: 3px 0; border-radius: 6px; }
+.rs-line .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.rs-other { padding-left: 18px; font-size: 14px; } .rs-other li { margin: 4px 0; }
