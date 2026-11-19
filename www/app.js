@@ -349,6 +349,7 @@ function renderLevels() {
   cards += stat("WMA 50", p1(L.ma50) + "p", `Price ${pct((L.c / L.ma50 - 1) * 100)} vs it`, "", "");
   cards += stat("WMA 200", p1(L.ma200) + "p", `Price ${pct((L.c / L.ma200 - 1) * 100)} vs it · ${L.ma50 > L.ma200 ? "50 above 200: bullish" : "50 below 200: bearish"}`);
   cards += stat("MACD hist", L.macd_hist.toFixed(3), `MACD ${L.macd.toFixed(2)} · signal ${L.macd_sig.toFixed(2)} (9-day SMA)`, L.macd_hist > 0 ? "green" : "red");
+  { const dy = divYield(d, wl, L.c); if (dy.y != null) cards += stat("Dividend yield", dy.y.toFixed(1) + "%", `${dy.trail.toFixed(2)}p in the last 12 months${dy.fy ? " · next 12m " + dy.fy.toFixed(1) + "%" : ""}`); }
   if (wl && wl.trend) cards += stat("Trendline", wl.trend.toFixed(0) + "p", `${pct(wl.above_trend_pct)} above (daily check)`);
   const alerts = watchAlerts();
   $("levels-body").innerHTML = `
@@ -358,6 +359,21 @@ function renderLevels() {
         : '<div class="muted" style="font-size:14px">Nothing to watch right now.</div>'}
     </div>
     <div class="note">Levels as of ${fmtDate(L.t)}${L.live ? " (live)" : ""}.</div>`;
+}
+
+// Dividend yield: dividends that went ex in the last 12 months, over today's price.
+// Forward: the daily check's expected next 12 months (usually last year's amounts repeated).
+function divYield(d, st, price) {
+  const today = todayStr(), from = new Date(Date.parse(today + "T12:00:00Z") - 365 * DAY).toISOString().slice(0, 10);
+  const amt = (d && d.ex_div_amounts) || {};
+  const paid = Object.entries(amt).filter(([t]) => t > from && t <= today);
+  // An expected ex-div that has now passed but isn't in the data yet (daily check not run): count it
+  for (const [t, v] of ((st && st.next_exdivs) || [])) if (t > from && t <= today && !paid.some(([k]) => Math.abs(Date.parse(k) - Date.parse(t)) < 20 * DAY)) paid.push([t, v]);
+  const trail = paid.reduce((a, [, v]) => a + v, 0);
+  const to = new Date(Date.now() + 365 * DAY).toISOString().slice(0, 10);
+  const next = ((st && st.next_exdivs) || []).filter(([t]) => t > today && t <= to);
+  const fwd = next.reduce((a, [, v]) => a + v, 0);
+  return { trail, fwd, y: price && trail ? trail / price * 100 : null, fy: price && fwd ? fwd / price * 100 : null, n: paid.length };
 }
 
 function renderWatch() {
@@ -378,6 +394,7 @@ function renderWatch() {
       <div class="row2"><span>RSI <b class="${rsi >= 70 ? "red" : rsi <= 40 ? "green" : ""}">${rsi.toFixed(0)}</b></span>
         <span>Trend ${st.trend ? st.trend.toFixed(0) + "p (" + pct(trendPct) + ")" : "none"}</span>
         <span>Ex-div ${ex ? fmtDate(ex[0]) + " · " + ex[1].toFixed(1) + "p" : "—"}</span></div>
+      ${(() => { const dy = divYield(d, st, price); return dy.y == null ? "" : `<div class="row2"><span>Yield <b class="${dy.y >= 6 ? "green" : ""}">${dy.y.toFixed(1)}%</b> (${dy.trail.toFixed(2)}p last 12m)</span>${dy.fy != null && Math.abs(dy.fy - dy.y) > 0.05 ? `<span>Next 12m ${dy.fy.toFixed(1)}% (expected)</span>` : ""}</div>`; })()}
       <div class="today ${cls}">${esc(today)}</div></div>`;
   }).join("");
   $("watch-body").innerHTML = html + `<div class="note">Tap a share to open its chart. Rules status from the daily check (${esc(S.watch.updated)}); prices live.</div>`;
