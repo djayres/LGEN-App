@@ -838,7 +838,7 @@ async function refresh(opts = {}) {
   if (busy) return; busy = true;
   $("refresh-btn").classList.add("spin");
   try {
-    if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) { await loadStatus(); checkStatusChange(); checkNewResult(); }
+    if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) { await loadStatus(); fillSharePicker(); checkStatusChange(); checkNewResult(); }
     if (opts.live !== false) await loadLive();
   } catch (e) {
     toast(String(e.message || e));
