@@ -172,3 +172,7 @@ body.full #results-strip { display: none !important; }
 .rs-line .tag { flex: none; width: 74px; text-align: center; font-size: 11px; font-weight: 700; padding: 3px 0; border-radius: 6px; }
 .rs-line .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .rs-other { padding-left: 18px; font-size: 14px; } .rs-other li { margin: 4px 0; }
+
+/* 1D / 1H / 30m candle buttons: orange when on, and only the ranges that fit each candle size */
+#tf-btns button.active { background: #f59e0b; border-color: #f59e0b; color: #fff; }
+body.intra #range-btns .daily, body:not(.intra) #range-btns .intra { display: none; }

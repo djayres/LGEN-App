@@ -27,9 +27,13 @@
   <section class="page" id="page-chart">
     <div class="toolbar" id="chart-toolbar">
       <select id="share-pick" class="share-pick"></select>
+      <span class="range-btns" id="tf-btns">
+        <button data-tf="1d" class="active">1D</button><button data-tf="1h">1H</button><button data-tf="30m">30m</button>
+      </span>
       <span class="range-btns" id="range-btns">
+        <button data-m="0.23" class="intra">5D</button><button data-m="1" class="intra">1M</button>
         <button data-m="3">3M</button><button data-m="6">6M</button><button data-m="12" class="active">1Y</button>
-        <button data-m="24">2Y</button><button data-m="60">5Y</button><button data-m="0">All</button>
+        <button data-m="24" class="daily">2Y</button><button data-m="60" class="daily">5Y</button><button data-m="0" class="daily">All</button>
       </span>
       <button id="theme-btn" class="small-btn">◐</button>
     </div>
