@@ -24,6 +24,9 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "
 const p1 = v => v == null || isNaN(v) ? "—" : v.toFixed(1);
 const p2 = v => v == null || isNaN(v) ? "—" : v.toFixed(2);
 const pct = v => (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+// US shares (currency "USD" in their chart file) show in dollars; London shares in pence.
+const isUSD = code => !!(S.data[code] && S.data[code].currency === "USD");
+const money = (v, usd) => usd ? (v == null || isNaN(v) ? "—" : "$" + v.toFixed(2)) : p1(v) + "p";
 const gbp = v => "£" + Math.round(v).toLocaleString("en-GB");
 const fmtDate = s => new Date(s + (s.length === 10 ? "T12:00:00Z" : "")).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const fmtShort = s => new Date(s + "T12:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
@@ -43,6 +46,11 @@ function londonClock() {
 function marketOpen() {
   const { wd, mins } = londonClock();
   return !["Sat", "Sun"].includes(wd) && mins >= 8 * 60 && mins <= 16 * 60 + 35;
+}
+// New York hours in UK time (14:30-21:05), only when a US share is on the list.
+function usMarketOpen() {
+  const { wd, mins } = londonClock();
+  return Object.keys(S.data).some(isUSD) && !["Sat", "Sun"].includes(wd) && mins >= 14 * 60 + 30 && mins <= 21 * 60 + 5;
 }
 // n trading days (Mon–Fri) before a date
 function tradingDaysBefore(s, n) {
@@ -132,7 +140,7 @@ const prevC = d => d.candles[d.candles.length - 2];
 // ───────────────────────── loading ─────────────────────────
 async function loadStatus() {
   const idx = await loadDataFile("chart_data/index.js");
-  S.shares = idx.obj;
+  S.shares = idx.obj.filter(s => !s.compare_only);   // FTSE / gilts are compare lines on the laptop, not shares
   const wl = await loadDataFile("watchlist.js");
   S.watch = wl.obj;
   S.statusSource = idx.src === "repo" && wl.src === "repo" ? "repo" : wl.src;
@@ -380,7 +388,7 @@ function renderWatch() {
   if (!S.watch) return;
   const html = S.watch.shares.map(st => {
     const sh = S.shares.find(s => s.ticker === st.ticker && !/_TEST/.test(s.code)), d = sh && S.data[sh.code];
-    const L = d ? last(d) : null, P = d ? prevC(d) : null;
+    const L = d ? last(d) : null, P = d ? prevC(d) : null, usd = st.currency === "USD" || (sh && isUSD(sh.code));
     const price = L ? L.c : st.close, rsi = L ? L.rsi : st.rsi, ch = L && P ? (L.c / P.c - 1) * 100 : null;
     const keys = Object.keys(st.items || {});
     const cls = keys.some(k => k === "overbought" || k === "spring_sell" || k.startsWith("run_up_sell")) ? "red"
@@ -390,9 +398,9 @@ function renderWatch() {
     const trendPct = st.trend ? (price / st.trend - 1) * 100 : null;
     return `<div class="card share-card" data-code="${sh ? sh.code : ""}">
       <div class="row1"><div><span class="name">${esc(st.name)}</span> <span class="muted">${esc(st.ticker.replace(".L", ""))}</span></div>
-        <div><span class="px">${p1(price)}p</span> ${ch != null ? `<span class="chg ${ch >= 0 ? "pos" : "neg"}">${ch >= 0 ? "+" : ""}${ch.toFixed(2)}%</span>` : ""}</div></div>
+        <div><span class="px">${money(price, usd)}</span> ${ch != null ? `<span class="chg ${ch >= 0 ? "pos" : "neg"}">${ch >= 0 ? "+" : ""}${ch.toFixed(2)}%</span>` : ""}</div></div>
       <div class="row2"><span>RSI <b class="${rsi >= 70 ? "red" : rsi <= 40 ? "green" : ""}">${rsi.toFixed(0)}</b></span>
-        <span>Trend ${st.trend ? st.trend.toFixed(0) + "p (" + pct(trendPct) + ")" : "none"}</span>
+        <span>Trend ${st.trend ? (usd ? "$" + st.trend.toFixed(2) : st.trend.toFixed(0) + "p") + " (" + pct(trendPct) + ")" : "none"}</span>
         <span>Ex-div ${ex ? fmtDate(ex[0]) + " · " + ex[1].toFixed(1) + "p" : "—"}</span></div>
       ${(() => { const dy = divYield(d, st, price); return dy.y == null ? "" : `<div class="row2"><span>Yield <b class="${dy.y >= 6 ? "green" : ""}">${dy.y.toFixed(1)}%</b> (${dy.trail.toFixed(2)}p last 12m)</span>${dy.fy != null && Math.abs(dy.fy - dy.y) > 0.05 ? `<span>Next 12m ${dy.fy.toFixed(1)}% (expected)</span>` : ""}</div>`; })()}
       <div class="today ${cls}">${esc(today)}</div></div>`;
@@ -842,7 +850,7 @@ $("refresh-btn").onclick = () => { refresh({ status: true }); refreshNews(true);
 setInterval(() => {
   if (document.hidden) return;
   refreshNews();
-  if (marketOpen() && Date.now() - S.liveAt >= LIVE_EVERY_MS) refresh();
+  if ((marketOpen() || usMarketOpen()) && Date.now() - S.liveAt >= LIVE_EVERY_MS) refresh();
   else renderHeader();
 }, 60 * 1000);
 document.addEventListener("visibilitychange", () => {
