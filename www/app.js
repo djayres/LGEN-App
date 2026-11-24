@@ -16,6 +16,8 @@ const S = {
   live: {},            // ticker -> {price, prev, time}
   liveAt: 0, statusAt: 0, statusSource: "",
   code: "LGEN", months: 12, page: 0, events: [],
+  tf: "1d",            // candle size: "1d", "1h" or "30m"
+  intra: {},           // code_tf -> {candles, at}: hourly / half-hourly candles straight from Yahoo
 };
 
 // ───────────────────────── helpers ─────────────────────────
@@ -175,6 +177,43 @@ async function loadLive() {
   applyLive();
   if (!ok && tickers.length) throw new Error("Live prices unavailable");
 }
+// 1-hour and 30-minute candles (23 Nov 2026), straight from Yahoo, in UK time ("2026-11-23 15:30").
+// Chart only: the rules and alerts stay on daily prices. Yahoo keeps 30-minute bars for 60 days.
+const TF = { "1h": { interval: "60m", range: "1y" }, "30m": { interval: "30m", range: "60d" } };
+const TF_RANGE = { "1d": 12, "1h": 1, "30m": 0.23 };   // starting view for each candle size (months)
+const londonStamp = ms => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+};
+// Candle time in ms (intraday kept on the UK clock as if it were UTC, so the chart axis shows UK time),
+// and the value the chart library wants: the date text for daily, seconds for intraday.
+const tms = t => t.length > 10 ? Date.parse(t.replace(" ", "T") + ":00Z") : Date.parse(t);
+const tt = t => t.length > 10 ? tms(t) / 1000 : t;
+async function loadIntra(code, force) {
+  const d = S.data[code], f = TF[S.tf];
+  if (!d || !f || /_TEST/.test(code)) return null;
+  const key = code + "_" + S.tf, have = S.intra[key];
+  if (have && !force && Date.now() - have.at < 5 * 60 * 1000) return have;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(d.ticker)}?range=${f.range}&interval=${f.interval}&includePrePost=false`;
+  const j = JSON.parse(await getText(url));
+  const r = j.chart && j.chart.result && j.chart.result[0];
+  if (!r || !r.timestamp) throw new Error("No " + S.tf + " prices for " + code);
+  const q = r.indicators.quote[0], cs = [];
+  r.timestamp.forEach((ts, i) => {
+    if (q.close[i] == null || q.open[i] == null) return;
+    cs.push({ t: londonStamp(ts * 1000), o: q.open[i], h: q.high[i], l: q.low[i], c: q.close[i], v: q.volume[i] || 0 });
+  });
+  if (cs.length < 30) throw new Error("Not enough " + S.tf + " prices for " + code);
+  const scale = cs[cs.length - 1].c < last(d).c * 0.2 ? 100 : 1;   // pounds → pence if needed
+  if (scale !== 1) cs.forEach(c => { c.o *= scale; c.h *= scale; c.l *= scale; c.c *= scale; });
+  cleanWicks(cs);
+  const o = { code, ticker: d.ticker, currency: d.currency, candles: cs };
+  computeIndicators(o);
+  S.intra[key] = { candles: o.candles.slice(40), at: Date.now() };   // first 40 bars only warm up RSI/MACD
+  return S.intra[key];
+}
+
 // Merge the live bars into each share's candles, then recompute indicators.
 function applyLive() {
   for (const code in S.data) {
@@ -570,20 +609,24 @@ function nearIdx(times, s) {
 }
 
 function buildChart() {
-  const d = S.data[S.code]; if (!d) return;
+  const d0 = S.data[S.code]; if (!d0) return;
+  const it = S.tf !== "1d" && !/_TEST/.test(S.code) && S.intra[S.code + "_" + S.tf];
+  const d = it ? Object.assign({}, d0, { candles: it.candles, trades: null, intraday: S.tf }) : d0;
   chartData = d;
+  document.body.classList.toggle("intra", !!it);
   const LW = window.LightweightCharts, th = TH(), cs = d.candles;
-  const times = cs.map(c => Date.parse(c.t));
+  const times = cs.map(c => tms(c.t));
   markIdx.D = (d.ex_div_dates || []).map(s => nearIdx(times, s)).filter(i => i >= 0);
   const evs = eventsFor(S.code.replace(/_TEST\d*$/, "")).filter(e => (e.kind || "R") === "R").map(e => ({ t: e.t, type: e.type }));
   markIdx.R = [...(d.results_dates || []), ...evs].map(r => [nearIdx(times, r.t), r.type]).filter(r => r[0] >= 0);
-  const keep = chart ? chart.timeScale().getVisibleLogicalRange() : null, sameShare = buildChart.code === S.code && keep;
+  const view = S.code + "|" + (d.intraday || "1d");
+  const keep = chart ? chart.timeScale().getVisibleLogicalRange() : null, sameShare = buildChart.code === view && keep;
   if (chart) { chart.remove(); chart = null; }
-  buildChart.code = S.code;
+  buildChart.code = view;
   chart = LW.createChart($("lw-chart"), Object.assign({
     autoSize: true, crosshair: { mode: LW.CrosshairMode.Normal },
     rightPriceScale: { minimumWidth: 64, borderColor: th.border, scaleMargins: { top: 0.06, bottom: 0.16 } },
-    timeScale: { rightOffset: 8, barSpacing: 4, minBarSpacing: 0.5, borderColor: th.border },
+    timeScale: { rightOffset: 8, barSpacing: d.intraday ? 6 : 4, minBarSpacing: 0.5, borderColor: th.border, timeVisible: !!d.intraday, secondsVisible: false },
     localization: { dateFormat: "dd MMM yy" },
     handleScale: { axisPressedMouseMove: { time: true, price: true }, pinch: true },
     handleScroll: { horzTouchDrag: true, vertTouchDrag: false },
@@ -591,17 +634,17 @@ function buildChart() {
   const pf = { type: "price", precision: 2, minMove: 0.01 }, pf4 = { type: "price", precision: 3, minMove: 0.001 };
   const vol = chart.addSeries(LW.HistogramSeries, { priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false }, 0);
   vol.priceScale().applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } });
-  vol.setData(cs.map(c => ({ time: c.t, value: c.v || 0, color: (c.c >= c.o ? th.up : th.down) + (theme === "light" ? "55" : "66") })));
+  vol.setData(cs.map(c => ({ time: tt(c.t), value: c.v || 0, color: (c.c >= c.o ? th.up : th.down) + (theme === "light" ? "55" : "66") })));
   candleS = chart.addSeries(LW.CandlestickSeries, { upColor: th.up, downColor: th.down, wickUpColor: th.up, wickDownColor: th.down,
     borderVisible: false, priceFormat: pf, priceLineStyle: LW.LineStyle.Dotted }, 0);
-  candleS.setData(cs.map(c => ({ time: c.t, open: c.o, high: c.h, low: c.l, close: c.c })));
+  candleS.setData(cs.map(c => ({ time: tt(c.t), open: c.o, high: c.h, low: c.l, close: c.c })));
   const line = (color, title, pane, extra) => chart.addSeries(LW.LineSeries, Object.assign({ color, lineWidth: 1, title,
     priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, priceFormat: pf }, extra || {}), pane);
-  const ser = k => cs.filter(c => c[k] != null).map(c => ({ time: c.t, value: c[k] }));
+  const ser = k => cs.filter(c => c[k] != null).map(c => ({ time: tt(c.t), value: c[k] }));
   line(th.w50, "WMA 50", 0).setData(ser("ma50"));
   line(th.w200, "WMA 200", 0).setData(ser("ma200"));
   const hist = chart.addSeries(LW.HistogramSeries, { priceFormat: pf4, priceLineVisible: false, lastValueVisible: false }, 1);
-  hist.setData(cs.filter(c => c.macd_hist != null).map(c => ({ time: c.t, value: c.macd_hist, color: c.macd_hist >= 0 ? th.histUp : th.histDown })));
+  hist.setData(cs.filter(c => c.macd_hist != null).map(c => ({ time: tt(c.t), value: c.macd_hist, color: c.macd_hist >= 0 ? th.histUp : th.histDown })));
   const macdS = line(th.macd, "MACD", 1, { priceFormat: pf4 }); macdS.setData(ser("macd"));
   line(th.sig, "Signal", 1, { priceFormat: pf4 }).setData(ser("macd_sig"));
   const rsiS = line(th.rsi, "RSI", 2, { autoscaleInfoProvider: o => { const r = o(); if (r) { r.priceRange.minValue = Math.min(r.priceRange.minValue, 25); r.priceRange.maxValue = Math.max(r.priceRange.maxValue, 75); } return r; } });
@@ -626,7 +669,8 @@ function showOHLC(i) {
   const d = chartData, c = d.candles[i], pv = d.candles[i - 1], th = TH(); if (!c) return;
   const ch = pv ? (c.c / pv.c - 1) * 100 : 0, col = c.c >= c.o ? th.up : th.down;
   const sp = v => `<span style="color:${col}">${p2(v)}</span>`;
-  $("ohlc").innerHTML = `<b>${esc(S.code)}</b> <span class="muted">${fmtDate(c.t)}${c.live ? " · live" : ""}</span><br>` +
+  const when = c.t.length > 10 ? fmtDate(c.t.slice(0, 10)) + " " + c.t.slice(11) : fmtDate(c.t);
+  $("ohlc").innerHTML = `<b>${esc(S.code)}</b> <span class="muted">${{ "1h": "1H · ", "30m": "30m · " }[d.intraday] || ""}${when}${c.live ? " · live" : ""}</span><br>` +
     `O ${sp(c.o)} H ${sp(c.h)} L ${sp(c.l)} C ${sp(c.c)} <span style="color:${col}">${ch >= 0 ? "+" : ""}${ch.toFixed(2)}%</span><br>` +
     `<span style="color:${th.w50}">WMA50 ${p2(c.ma50)}</span> <span style="color:${th.w200}">WMA200 ${p2(c.ma200)}</span> ` +
     `<span style="color:${th.rsi}">RSI ${p1(c.rsi)}</span>`;
@@ -636,7 +680,13 @@ function setRange(months) {
   if (!chart || !chartData) return;
   const cs = chartData.candles, n = cs.length;
   let from = 0;
-  if (months) { const d = new Date(cs[n - 1].t); d.setMonth(d.getMonth() - months); const s = d.toISOString().slice(0, 10); from = Math.max(0, cs.findIndex(c => c.t >= s)); }
+  if (months) {
+    const lastT = tms(cs[n - 1].t);
+    let t0;
+    if (months < 1) t0 = lastT - months * 30.44 * DAY;
+    else { const d = new Date(lastT); d.setUTCMonth(d.getUTCMonth() - months); t0 = d.getTime(); }
+    from = Math.max(0, cs.findIndex(c => tms(c.t) >= t0));
+  }
   chart.timeScale().setVisibleLogicalRange({ from, to: n - 1 + Math.max(4, Math.round((n - from) * 0.05)) });
 }
 
@@ -650,7 +700,31 @@ function showShare(code) {
   S.code = code; $("share-pick").value = code;
   try { localStorage.setItem("share", code); } catch (e) {}
   buildChart();
+  showTf();
 }
+// 1D / 1H / 30m buttons. Tests (paper trading) are daily only.
+function showTf() {
+  const test = /_TEST/.test(S.code);
+  document.querySelectorAll("#tf-btns button").forEach(b => { b.disabled = test && b.dataset.tf !== "1d";
+    b.classList.toggle("active", b.dataset.tf === (test ? "1d" : S.tf)); });
+  if (test || S.tf === "1d") return;
+  loadIntra(S.code).then(r => { if (r && buildChart.code !== S.code + "|" + S.tf) buildChart(); })
+    .catch(e => toast(String(e.message || e)));
+}
+function pickRange(m) {
+  S.months = m;
+  document.querySelectorAll("#range-btns button").forEach(x => x.classList.toggle("active", +x.dataset.m === m));
+}
+document.querySelectorAll("#tf-btns button").forEach(b => b.onclick = () => {
+  if (b.disabled || b.dataset.tf === S.tf) return;
+  S.tf = b.dataset.tf;
+  try { localStorage.setItem("tf", S.tf); } catch (e) {}
+  pickRange(TF_RANGE[S.tf]);
+  buildChart.code = "";   // new candle size: start at its own view
+  if (S.tf === "1d") { buildChart(); showTf(); return; }
+  toast(S.tf === "1h" ? "Loading 1-hour candles…" : "Loading 30-minute candles…");
+  showTf();
+});
 
 // ───────────────────────── page swiping, tabs, landscape ─────────────────────────
 const pager = $("pager"), tabs = [...document.querySelectorAll("#tabs button")];
@@ -840,6 +914,7 @@ async function refresh(opts = {}) {
   try {
     if (opts.status || !S.statusAt || Date.now() - S.statusAt > STATUS_EVERY_MS) { await loadStatus(); fillSharePicker(); checkStatusChange(); checkNewResult(); }
     if (opts.live !== false) await loadLive();
+    if (S.tf !== "1d" && !/_TEST/.test(S.code)) { await loadIntra(S.code, true); buildChart(); }
   } catch (e) {
     toast(String(e.message || e));
     renderAll();
@@ -862,10 +937,13 @@ document.addEventListener("visibilitychange", () => {
 (async function start() {
   applyTheme();
   try { S.code = localStorage.getItem("share") || "LGEN"; } catch (e) {}
+  try { S.tf = localStorage.getItem("tf") || "1d"; if (!TF[S.tf]) S.tf = "1d"; } catch (e) {}
+  pickRange(TF_RANGE[S.tf]);
   try { await loadStatus(); } catch (e) { toast("Couldn't load data: " + e.message); return; }
   if (!S.data[S.code]) S.code = "LGEN";
   fillSharePicker();
   renderAll();
+  showTf();
   let p = 0; try { p = +(localStorage.getItem("page") || 0); } catch (e) {}
   goPage(p, false);
   checkStatusChange();
