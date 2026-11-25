@@ -701,6 +701,7 @@ function showShare(code) {
   try { localStorage.setItem("share", code); } catch (e) {}
   buildChart();
   showTf();
+  S.newsTopic = "all"; renderNews(); refreshNews();
 }
 // 1D / 1H / 30m buttons. Tests (paper trading) are daily only.
 function showTf() {
@@ -829,16 +830,55 @@ function checkNewResult() {
 $("results-strip").onclick = () => openResults();
 $("results-close").onclick = () => { $("results-sheet").style.display = "none"; };
 
-// ───────────────────────── news (Google News RSS) ─────────────────────────
-const NEWS_TOPICS = [
-  { id: "inf", label: "Inflation", q: ['"UK inflation"', 'UK CPI inflation'] },
-  { id: "boe", label: "BoE / rates", q: ['"Bank of England" interest rates'] },
-  { id: "gilt", label: "Gilts", q: ['gilt yields'] },
-  { id: "lg", label: "L&G", q: ['"Legal & General"', '"Legal and General"', '"L&G" shares OR results OR "trading update"', 'LGEN shares', '"Legal & General" "trading update" OR results OR preview'] },
-];
+// ───────────────────────── news (Google News RSS), per share ─────────────────────────
+// The News page follows the share picked on the chart (or tapped on the Watchlist).
+// Each share gets its own company searches plus a few for what moves it (sector, commodity, rates).
+const NEWS_EXTRA = {
+  LGEN: [
+    { id: "inf", label: "Inflation", q: ['"UK inflation"', 'UK CPI inflation'] },
+    { id: "boe", label: "BoE / rates", q: ['"Bank of England" interest rates'] },
+    { id: "gilt", label: "Gilts", q: ['gilt yields'] },
+  ],
+  CAML: [{ id: "x1", label: "Copper & zinc", q: ['copper price', 'zinc price'] }],
+  NG: [{ id: "x1", label: "Ofgem / grid", q: ['Ofgem electricity networks', 'UK electricity grid investment'] },
+       { id: "x2", label: "Rates", q: ['"Bank of England" interest rates'] }],
+  SDLF: [{ id: "x1", label: "UK insurers", q: ['UK life insurers shares', '"pension risk transfer"'] },
+         { id: "x2", label: "Gilts", q: ['gilt yields'] }],
+  GOOGL: [{ id: "x1", label: "AI", q: ['Google Gemini', 'Alphabet antitrust OR regulator'] }],
+  NBIS: [{ id: "x1", label: "AI cloud", q: ['"AI data center" GPU cloud', 'Nvidia GPU supply'] }],
+  SNDK: [{ id: "x1", label: "Memory chips", q: ['NAND flash prices', 'memory chip prices'] }],
+  HYMC: [{ id: "x1", label: "Gold & silver", q: ['gold price', 'silver price'] }],
+  FPS: [{ id: "x1", label: "Grid & power", q: ['electrical equipment data center power demand'] }],
+};
+// Searches for the company itself. Names alone can be vague, so some shares get exact phrases.
+const NEWS_NAMES = {
+  LGEN: ['"Legal & General"', '"Legal and General"', '"L&G" shares OR results OR "trading update"', 'LGEN shares', '"Legal & General" "trading update" OR results OR preview'],
+  SDLF: ['"Standard Life" shares OR results', '"Phoenix Group"', 'SDLF shares'],
+  GOOGL: ['Alphabet stock', 'Google Alphabet shares'],
+  NG: ['"National Grid" shares OR results OR dividend', '"National Grid" plc'],
+  CAML: ['"Central Asia Metals"'],
+};
 const NEWS_EVERY_MS = 15 * 60 * 1000;
-S.news = []; S.newsAt = 0; S.newsTopic = "all";
-try { const c = JSON.parse(localStorage.getItem("news") || "null"); if (c) { S.news = c.items; S.newsAt = c.at; } } catch (e) {}
+S.newsBy = {}; S.newsTopic = "all";
+try { const c = JSON.parse(localStorage.getItem("news") || "null"); if (c) S.newsBy.LGEN = c; } catch (e) {}   // old single-share cache
+
+function newsCode() {
+  const c = (S.code || "LGEN").replace(/_TEST\d*$/, "");
+  const sh = S.shares.find(s => s.code === c);
+  return sh && !sh.compare_only ? c : "LGEN";
+}
+function newsShare(code) { return S.shares.find(s => s.code === code) || { code, name: code, ticker: code }; }
+function newsTopics(code) {
+  const sh = newsShare(code);
+  const name = sh.name.replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+(A|B|C|plc|PLC|Group)$/, "").trim();
+  const uk = /\.L$/.test(sh.ticker || "");
+  const q = NEWS_NAMES[code] || [`"${name}"`, `"${name}" ${uk ? "shares" : "stock"}`, `${code} ${uk ? "shares" : "stock"}`];
+  return [{ id: "co", label: code === "LGEN" ? "L&G" : code, q }, ...(NEWS_EXTRA[code] || [])];
+}
+function newsCache(code) {
+  if (!S.newsBy[code]) { try { S.newsBy[code] = JSON.parse(localStorage.getItem("news:" + code) || "null"); } catch (e) {} }
+  return S.newsBy[code] || { items: [], at: 0 };
+}
 
 function parseRss(xml, topic) {
   const doc = new DOMParser().parseFromString(xml, "text/xml"), out = [];
@@ -853,10 +893,12 @@ function parseRss(xml, topic) {
   }
   return out;
 }
-async function loadNews() {
-  const jobs = NEWS_TOPICS.flatMap(tp => tp.q.map(q => [tp.id, q]));
+async function loadNews(code) {
+  const uk = /\.L$/.test(newsShare(code).ticker || "") || code === "LGEN";
+  const region = uk ? "hl=en-GB&gl=GB&ceid=GB:en" : "hl=en-US&gl=US&ceid=US:en";
+  const jobs = newsTopics(code).flatMap(tp => tp.q.map(q => [tp.id, q]));
   const res = await Promise.allSettled(jobs.map(([id, q]) => getText(
-    "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:14d") + "&hl=en-GB&gl=GB&ceid=GB:en").then(x => parseRss(x, id))));
+    "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:14d") + "&" + region).then(x => parseRss(x, id))));
   const byTitle = new Map();
   for (const r of res) if (r.status === "fulfilled") for (const n of r.value) {
     const k = n.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80);
@@ -865,10 +907,10 @@ async function loadNews() {
     else byTitle.set(k, n);
   }
   if (!byTitle.size) throw new Error("News unavailable");
-  S.news = [...byTitle.values()].sort((a, b) => b.t - a.t).slice(0, 200);
-  S.newsAt = Date.now();
-  try { localStorage.setItem("news", JSON.stringify({ items: S.news, at: S.newsAt })); } catch (e) {}
-  renderNews();
+  const c = { items: [...byTitle.values()].sort((a, b) => b.t - a.t).slice(0, 200), at: Date.now() };
+  S.newsBy[code] = c;
+  try { localStorage.setItem("news:" + code, JSON.stringify(c)); } catch (e) {}
+  if (newsCode() === code) renderNews();
 }
 function ago(t) {
   const m = Math.round((Date.now() - t) / 60000);
@@ -877,25 +919,36 @@ function ago(t) {
   return new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 function renderNews() {
-  let seen = 0; try { seen = +(localStorage.getItem("newsSeen") || 0); } catch (e) {}
-  const list = S.news.filter(n => S.newsTopic === "all" || n.topics.includes(S.newsTopic));
-  const lbl = Object.fromEntries(NEWS_TOPICS.map(t => [t.id, t.label]));
+  const code = newsCode(), topics = newsTopics(code), cache = newsCache(code);
+  if (S.newsTopic !== "all" && !topics.some(t => t.id === S.newsTopic)) S.newsTopic = "all";
+  let seen = 0; try { seen = +(localStorage.getItem("newsSeen:" + code) || 0); } catch (e) {}
+  const list = cache.items.filter(n => S.newsTopic === "all" || n.topics.includes(S.newsTopic));
+  const lbl = Object.fromEntries(topics.map(t => [t.id, t.label]));
+  const opts = S.shares.filter(s => !s.compare_only && !/_TEST/.test(s.code))
+    .map(s => `<option value="${esc(s.code)}" ${s.code === code ? "selected" : ""}>${esc(s.code)} · ${esc(s.name)}</option>`).join("");
   $("news-body").innerHTML = `
-    <div class="chips">${[{ id: "all", label: "All" }, ...NEWS_TOPICS].map(t =>
+    <div style="display:flex;align-items:center;gap:8px"><span class="muted" style="font-size:13px">News for</span>
+      <select id="news-pick" class="share-pick" style="flex:1;max-width:none">${opts}</select></div>
+    <div class="chips">${[{ id: "all", label: "All" }, ...topics].map(t =>
       `<button class="chip ${S.newsTopic === t.id ? "active" : ""}" data-t="${t.id}">${esc(t.label)}</button>`).join("")}</div>
     <div class="card" style="padding-top:2px;padding-bottom:2px">${list.length ? list.map(n => `
       <a class="news-item" href="${esc(n.link)}">
         <div class="news-title">${esc(n.title)}</div>
         <div class="news-meta">${seen && n.t > seen ? '<span class="news-new">NEW</span>' : ""}<span>${esc(n.src)}</span><span>${ago(n.t)}</span>
-          <span>${n.topics.map(t => esc(lbl[t])).join(" · ")}</span></div>
-      </a>`).join("") : '<div class="muted" style="padding:12px 0">No headlines yet. Pull in news with ⟳ at the top.</div>'}</div>
-    <div class="note">Google News, last 14 days, newest first. Tap a headline to open it.${S.newsAt ? " Updated " + ago(S.newsAt) + "." : ""}</div>`;
+          <span>${n.topics.map(t => esc(lbl[t] || "")).filter(Boolean).join(" · ")}</span></div>
+      </a>`).join("") : `<div class="muted" style="padding:12px 0">${cache.at ? "No headlines in the last 14 days." : "Loading headlines…"}</div>`}</div>
+    <div class="note">Google News, last 14 days, newest first. Follows the share on the chart. Tap a headline to open it.${cache.at ? " Updated " + ago(cache.at) + "." : ""}</div>`;
   $("news-body").querySelectorAll(".chip").forEach(b => b.onclick = () => { S.newsTopic = b.dataset.t; renderNews(); });
+  $("news-pick").onchange = e => { markNewsSeen(); showShare(e.target.value); };
 }
-function markNewsSeen() { if (S.news.length) try { localStorage.setItem("newsSeen", String(Math.max(...S.news.map(n => n.t)))); } catch (e) {} }
+function markNewsSeen() {
+  const code = newsCode(), items = newsCache(code).items;
+  if (items.length) try { localStorage.setItem("newsSeen:" + code, String(Math.max(...items.map(n => n.t)))); } catch (e) {}
+}
 function refreshNews(force) {
-  if (!force && Date.now() - S.newsAt < NEWS_EVERY_MS) return;
-  loadNews().catch(e => { if (S.page === 6) toast(e.message); });
+  const code = newsCode();
+  if (!force && Date.now() - newsCache(code).at < NEWS_EVERY_MS) return;
+  loadNews(code).catch(e => { if (S.page === 6) toast(e.message); });
 }
 
 // ───────────────────────── refresh loop ─────────────────────────
