@@ -148,6 +148,7 @@ async function loadStatus() {
   S.statusSource = idx.src === "repo" && wl.src === "repo" ? "repo" : wl.src;
   try { S.events = (await loadDataFile("events.js")).obj || []; } catch (e) { S.events = S.events || []; }
   try { S.results = (await loadDataFile("results.js")).obj || []; } catch (e) { S.results = S.results || []; }
+  try { S.newsCfg = (await loadDataFile("news_topics.js")).obj || S.newsCfg; } catch (e) {}   // same news searches as the laptop
   const got = await Promise.all(S.shares.map(sh => loadDataFile("chart_data/" + sh.code + ".js").then(r => [sh.code, r.obj]).catch(() => null)));
   for (const g of got) if (g) { cleanWicks(g[1].candles); S.data[g[0]] = g[1]; }
   S.statusAt = Date.now();
@@ -858,6 +859,8 @@ const NEWS_NAMES = {
   NG: ['"National Grid" shares OR results OR dividend', '"National Grid" plc'],
   CAML: ['"Central Asia Metals"'],
 };
+// Off-topic headlines the searches pull in (local gold-rate pages, shopping deals).
+const NEWS_JUNK = /\bbest .{0,40}deals\b|rates? today|\btola\b|\bbhari\b|Pakistan|Bangladesh|Chennai|Mumbai|Delhi|Kerala|Hyderabad|Karachi|Dubai|\bUAE\b|Nigeria|Kenya|per gram|Black Friday|Cyber Monday|coupon|horoscope/i;
 const NEWS_EVERY_MS = 15 * 60 * 1000;
 S.newsBy = {}; S.newsTopic = "all";
 try { const c = JSON.parse(localStorage.getItem("news") || "null"); if (c) S.newsBy.LGEN = c; } catch (e) {}   // old single-share cache
@@ -869,6 +872,8 @@ function newsCode() {
 }
 function newsShare(code) { return S.shares.find(s => s.code === code) || { code, name: code, ticker: code }; }
 function newsTopics(code) {
+  const cfg = S.newsCfg && S.newsCfg[code];
+  if (cfg) return [{ id: "co", label: cfg.label || code, q: cfg.names, must: cfg.must }, ...(cfg.topics || [])];
   const sh = newsShare(code);
   const name = sh.name.replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+(A|B|C|plc|PLC|Group)$/, "").trim();
   const uk = /\.L$/.test(sh.ticker || "");
@@ -894,11 +899,13 @@ function parseRss(xml, topic) {
   return out;
 }
 async function loadNews(code) {
-  const uk = /\.L$/.test(newsShare(code).ticker || "") || code === "LGEN";
+  const cfg = S.newsCfg && S.newsCfg[code];
+  const uk = cfg ? cfg.region !== "US" : /\.L$/.test(newsShare(code).ticker || "") || code === "LGEN";
   const region = uk ? "hl=en-GB&gl=GB&ceid=GB:en" : "hl=en-US&gl=US&ceid=US:en";
-  const jobs = newsTopics(code).flatMap(tp => tp.q.map(q => [tp.id, q]));
-  const res = await Promise.allSettled(jobs.map(([id, q]) => getText(
-    "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:14d") + "&" + region).then(x => parseRss(x, id))));
+  const jobs = newsTopics(code).flatMap(tp => tp.q.map(q => [tp.id, q, tp.must ? new RegExp(tp.must, "i") : null]));
+  const res = await Promise.allSettled(jobs.map(([id, q, must]) => getText(
+    "https://news.google.com/rss/search?q=" + encodeURIComponent(q + " when:14d") + "&" + region)
+    .then(x => parseRss(x, id).filter(n => !NEWS_JUNK.test(n.title) && (!must || must.test(n.title))))));
   const byTitle = new Map();
   for (const r of res) if (r.status === "fulfilled") for (const n of r.value) {
     const k = n.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80);
